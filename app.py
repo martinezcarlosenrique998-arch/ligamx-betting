@@ -272,6 +272,27 @@ with tab1:
     st.markdown('<div class="section-header">🎯 ANÁLISIS AUTOMÁTICO DE PARTIDO</div>', unsafe_allow_html=True)
 
     if not football_api_key:
+        # DIAGNÓSTICO TEMPORAL - borrar después
+import json
+if football_api_key:
+    st.markdown("### 🔍 Diagnóstico")
+    
+    # Test temporadas disponibles
+    r1 = api_football("leagues", {"id": 262}, football_api_key)
+    seasons = r1.get("response", [{}])[0].get("seasons", [])
+    st.write("Temporadas disponibles:", [s["year"] for s in seasons[-5:]])
+    
+    # Test fixtures con temporada 2025
+    r2 = api_football("fixtures", {"league": 262, "season": 2025, "next": 5}, football_api_key)
+    st.write("Fixtures 2025:", len(r2.get("response", [])), "encontrados")
+    
+    # Test fixtures con temporada 2024
+    r3 = api_football("fixtures", {"league": 262, "season": 2024, "next": 5}, football_api_key)
+    st.write("Fixtures 2024:", len(r3.get("response", [])), "encontrados")
+    
+    # Errores de la API
+    st.write("Errores API:", r2.get("errors", "ninguno"))
+    st.write("Requests restantes:", r2.get("parameters", {}))
         st.warning("👈 Ingresa tu API Key de API-Football en el sidebar para activar el modo automático.")
         st.info("Regístrate gratis en: https://dashboard.api-football.com/register")
         st.stop()
