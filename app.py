@@ -272,9 +272,23 @@ with tab1:
     st.markdown('<div class="section-header">🎯 ANÁLISIS AUTOMÁTICO DE PARTIDO</div>', unsafe_allow_html=True)
 
     if not football_api_key:
-        # DIAGNÓSTICO TEMPORAL - borrar después
-import json
-if football_api_key:
+        st.warning("👈 Ingresa tu API Key de API-Football en el sidebar.")
+        st.stop()
+
+    # DIAGNÓSTICO TEMPORAL
+    st.markdown("### 🔍 Diagnóstico API")
+    r1 = api_football("leagues", {"id": 262}, football_api_key)
+    seasons = r1.get("response", [{}])[0].get("seasons", [])
+    st.write("✅ Temporadas disponibles:", [s["year"] for s in seasons[-5:]])
+    r2 = api_football("fixtures", {"league": 262, "season": 2025, "next": 5}, football_api_key)
+    st.write("Fixtures season=2025:", len(r2.get("response", [])), "encontrados")
+    r3 = api_football("fixtures", {"league": 262, "season": 2024, "next": 5}, football_api_key)
+    st.write("Fixtures season=2024:", len(r3.get("response", [])), "encontrados")
+    r4 = api_football("fixtures", {"league": 262, "season": 2026, "next": 5}, football_api_key)
+    st.write("Fixtures season=2026:", len(r4.get("response", [])), "encontrados")
+    st.write("Errores:", r2.get("errors", "ninguno"))
+    st.stop()
+    # FIN DIAGNÓSTICO
     st.markdown("### 🔍 Diagnóstico")
     
     # Test temporadas disponibles
