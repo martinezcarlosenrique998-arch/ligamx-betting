@@ -1546,9 +1546,6 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     aga = away_venue_ga if away_venue_ga is not None else away_ga
 
     # ── xG real de Understat: blend dinámico según tamaño de muestra ──
-    # Con más partidos con xG real, confiamos más en el xG vs goles históricos
-    # Contar partidos que realmente tienen xG disponible (no proxy)
-    # home_n y away_n ya reflejan el número de partidos con stats disponibles
     def xg_weight(n): return 0.50 if n < 6 else (0.70 if n < 10 else 0.80)
     hw = xg_weight(home_n); aw_w = xg_weight(away_n)
     if home_xgf is not None: hgf = home_xgf * hw    + hgf * (1-hw)
@@ -1594,12 +1591,10 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     xg_a *= away_xg_regression
 
     # ── Fatiga ──
-    # Un equipo cansado ANOTA menos (su propio factor reduce su xG)
     xg_h *= home_fatigue
     xg_a *= away_fatigue
 
     # ── Ventaja local estructural por liga ──
-    # Calibrado con distribuciones reales 2022-2026 por liga
     _adv = LEAGUE_ADV_FACTORS.get(league_code, LEAGUE_ADV_FACTORS["PL"])
     xg_h *= _adv[0]  # HOME_ADV
     xg_a *= _adv[1]  # AWAY_DIS
@@ -1636,24 +1631,21 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     draw_pct = round(dr_r / tot * 100, 1)
     away_pct = round(100 - home_pct - draw_pct, 1)
 
+    # =========================================================
+    # AQUI ESTÁ LA CORRECCIÓN DE DOBLE CONTEO (OVER, BTTS, HT)
+    # =========================================================
     # ── Over/Under ──
     over_15_dc = matrix_sum(M, lambda i,j: i+j >= 2) * 100
     over_25_dc = matrix_sum(M, lambda i,j: i+j >= 3) * 100
     over_35_dc = matrix_sum(M, lambda i,j: i+j >= 4) * 100
 
-    # Historial de Over de los equipos (blend dinámico según muestra)
+    # Historial de los equipos
     over25_hist = (home_over25 + away_over25) / 2 * 100
-    over_25_blended = over_25_dc * 0.25 + over25_hist * 0.75
+    over15_hist_proxy = min(95.0, over25_hist * 1.35)
 
-    # Over 1.5: historial de "anotan al menos 2 goles en total" — blend 40/60
-    # Over 1.5 ocurre en ~80%+ de partidos, Poisson lo estima bien pero historial ajusta
-    over15_hist = (calc_over_rate.__doc__ and over25_hist) or over25_hist  # proxy: equipos goleadores
-    # Usar el historial de los equipos como proxy de over 1.5
-    _home_o15 = home_over25  # conservador: si anotan 2.5+, seguro 1.5+
-    _away_o15 = away_over25
-    # Cálculo más honesto: blendear Poisson con el over25 de los equipos escalado
-    over15_hist_proxy = min(95.0, over25_hist * 1.35)  # Over 1.5 ocurre ~35% más que Over 2.5
-    over_15_blended = over_15_dc * 0.60 + over15_hist_proxy * 0.40
+    # Blend corregido: Poisson (Matemáticas) pesa 85-90%, Historial pesa 10-15%
+    over_25_blended = over_25_dc * 0.85 + over25_hist * 0.15
+    over_15_blended = over_15_dc * 0.90 + over15_hist_proxy * 0.10
 
     over_15  = round(over_15_blended, 1)
     over_25  = round(over_25_blended, 1)
@@ -1662,27 +1654,22 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     under_25 = round(100 - over_25, 1)
     under_35 = round(100 - over_35, 1)
 
-    # ── BTTS — blend dinámico según tamaño de muestra ──
-    # Con muestras pequeñas (<6 partidos) el historial tiene alta varianza:
-    # un equipo 3/3 BTTS reciente no significa 100% garantizado.
-    # Blend dinámico: más peso a Poisson con poca muestra, más al historial con mucha.
+    # ── BTTS ──
     btts_dc   = round(matrix_sum(M, lambda i,j: i > 0 and j > 0) * 100, 1)
     btts_hist = round((home_btts + away_btts) / 2 * 100, 1)
-    # n_sample = proxy del número de partidos disponibles (mínimo de home_n y away_n)
+
     _btts_n = min(home_n, away_n)
+
+    # Blend corregido: Mucho más peso a Poisson para evitar doble conteo
     if _btts_n < 6:
-        _w_hist = 0.50   # poca muestra: 50/50 Poisson-historial
+        _w_hist = 0.05   # 95% Poisson
     elif _btts_n < 10:
-        _w_hist = 0.70   # muestra media: 70% historial
+        _w_hist = 0.10   # 90% Poisson
     else:
-        _w_hist = 0.85   # muestra grande: 85% historial (backtest original)
+        _w_hist = 0.20   # 80% Poisson, 20% Historial
+
     btts_yes  = round(btts_dc * (1 - _w_hist) + btts_hist * _w_hist, 1)
     btts_no   = round(100 - btts_yes, 1)
-
-
-
-
-
 
     # ── Hándicap Asiático ──
     ha_home_minus05 = round(matrix_sum(M, lambda i,j: i > j)    * 100, 1)
@@ -1690,11 +1677,9 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     ha_home_minus15 = round(matrix_sum(M, lambda i,j: i-j >= 2) * 100, 1)
     ha_away_plus15  = round(100 - ha_home_minus15, 1)
 
-    # ── HT: usar goal timing real si disponible ──
-    # Fracción media de xG que cae en la 1ª mitad
-    ht_frac_h = (home_ht_frac + away_ht_frac_ag) / 2   # local anota en 1ª
-    ht_frac_a = (away_ht_frac + home_ht_frac_ag) / 2   # visita anota en 1ª
-    # Clamp razonable: entre 35% y 55% de los goles en 1ª mitad
+    # ── HT (Medio Tiempo) ──
+    ht_frac_h = (home_ht_frac + away_ht_frac_ag) / 2   
+    ht_frac_a = (away_ht_frac + home_ht_frac_ag) / 2   
     ht_frac_h = max(0.35, min(0.55, ht_frac_h))
     ht_frac_a = max(0.35, min(0.55, ht_frac_a))
 
@@ -1706,32 +1691,31 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     ht_aw = matrix_sum(M_ht, lambda i,j: i < j)
     ht_t  = ht_hw + ht_dr + ht_aw
 
-    # Blend 60% Poisson-HT, 40% historial real HT
-    ht_home_win = round((ht_hw/ht_t * 0.60 + home_ht_w * 0.40) * 100, 1)
-    ht_draw_val = round((ht_dr/ht_t * 0.60 + (home_ht_d + away_ht_d)/2 * 0.40) * 100, 1)
+    # Blend Corregido: 80% Poisson, 20% Historial
+    ht_home_win = round((ht_hw/ht_t * 0.80 + home_ht_w * 0.20) * 100, 1)
+    ht_draw_val = round((ht_dr/ht_t * 0.80 + (home_ht_d + away_ht_d)/2 * 0.20) * 100, 1)
     ht_away_win = round(max(0, 100 - ht_home_win - ht_draw_val), 1)
+    # =========================================================
 
     # ── Temperature Scaling — calibración post-modelo ──
-    # Corrige sobreconfianza en extremos detectada en backtest (723+ partidos multi-liga)
-    # BL1 usa T=2.0: mayor compresión porque favoritos locales 60-80% estaban sobreestimados -11%
     _ts_1x2 = 2.0 if league_code == "BL1" else 1.7
     home_pct  = ts_pct(home_pct,  T=_ts_1x2)
     draw_pct  = ts_pct(draw_pct,  T=_ts_1x2)
     away_pct  = ts_pct(away_pct,  T=_ts_1x2)
-    # Renormalizar 1X2 para que sumen exactamente 100
+    
     _tot_1x2  = home_pct + draw_pct + away_pct
     home_pct  = round(home_pct  / _tot_1x2 * 100, 1)
     draw_pct  = round(draw_pct  / _tot_1x2 * 100, 1)
     away_pct  = round(100 - home_pct - draw_pct, 1)
 
     over_15   = ts_pct(over_15,  T=1.5, cap_pct=85.0, floor_pct=15.0)
-    over_25   = ts_pct(over_25,  T=2.0, cap_pct=65.0, floor_pct=28.0)  # blend ya levanta los casos extremos
+    over_25   = ts_pct(over_25,  T=2.0, cap_pct=65.0, floor_pct=28.0) 
     over_35   = ts_pct(over_35,  T=1.5, cap_pct=55.0, floor_pct=10.0)
     under_15  = round(100 - over_15, 1)
     under_25  = round(100 - over_25, 1)
     under_35  = round(100 - over_35, 1)
 
-    btts_yes  = ts_pct(btts_yes, T=1.5, cap_pct=70.0, floor_pct=38.0)  # floor subido: backtest mostró subestimación en rangos bajos
+    btts_yes  = ts_pct(btts_yes, T=1.5, cap_pct=70.0, floor_pct=38.0) 
     btts_no   = round(100 - btts_yes, 1)
 
     ha_home_minus05 = ts_pct(ha_home_minus05, T=1.7)
@@ -1743,7 +1727,7 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
     ht_draw_val = ts_pct(ht_draw_val, T=1.5)
     ht_away_win = round(max(0, 100 - ht_home_win - ht_draw_val), 1)
 
-    # ── Doble Oportunidad — recalcular con probs ya escaladas ──
+    # ── Doble Oportunidad ──
     do_1x = round(home_pct + draw_pct, 1)
     do_x2 = round(draw_pct + away_pct, 1)
     do_12 = round(home_pct + away_pct, 1)
@@ -1760,14 +1744,12 @@ def calc_all_predictions(home_form, away_form, home_gf, away_gf,
         "ht_home_win": ht_home_win, "ht_draw": ht_draw_val, "ht_away_win": ht_away_win,
         "do_1x": do_1x, "do_x2": do_x2, "do_12": do_12,
         "goal_diff_exp": round(xg_h - xg_a, 2),
-        # Índices para UI y análisis IA
         "home_att_idx": round(home_att, 2), "home_def_idx": round(home_def, 2),
         "away_att_idx": round(away_att, 2), "away_def_idx": round(away_def, 2),
         "home_form_mult": round(home_form_mult, 3),
         "away_form_mult": round(away_form_mult, 3),
         "home_h2h_mult":  round(home_h2h_mult, 3),
         "away_h2h_mult":  round(away_h2h_mult, 3),
-        # ELO
         "elo_home_p": elo_home_p, "elo_draw_p": elo_draw_p, "elo_away_p": elo_away_p,
         "elo_home": elo_home, "elo_away": elo_away,
     }
